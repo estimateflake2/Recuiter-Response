@@ -1,0 +1,589 @@
+{
+  "name": "Recuiter Response",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1008,
+        -848
+      ],
+      "id": "9e160521-6ac6-4885-b9ae-c7af94a647c4",
+      "name": "Gmail Trigger1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function b64urlToUtf8(b64url) {\n  if (!b64url) return \"\";\n  // Gmail uses base64url: -_/ instead of +/\n  const b64 = b64url.replace(/-/g, \"+\").replace(/_/g, \"/\");\n  try {\n    return Buffer.from(b64, \"base64\").toString(\"utf8\");\n  } catch {\n    return \"\";\n  }\n}\n\n// Recursively collect headers (first map wins)\nfunction findHeaders(node) {\n  const map = {};\n  const stack = [node || {}];\n  while (stack.length) {\n    const cur = stack.pop();\n    if (cur && Array.isArray(cur.headers)) {\n      for (const h of cur.headers) {\n        const name = (h.name || \"\").toLowerCase();\n        if (name && !(name in map)) map[name] = h.value || \"\";\n      }\n    }\n    if (cur && Array.isArray(cur.parts)) {\n      for (const p of cur.parts) stack.push(p);\n    }\n  }\n  return map;\n}\n\n// Recursively pick body: prefer text/plain, else text/html\nfunction extractBody(node) {\n  let bestText = \"\";\n  let html = \"\";\n\n  const stack = [node || {}];\n  while (stack.length) {\n    const cur = stack.pop();\n    if (!cur) continue;\n\n    if (cur.mimeType === \"text/plain\" && cur.body && cur.body.data) {\n      const decoded = b64urlToUtf8(cur.body.data);\n      if (decoded && decoded.length > bestText.length) bestText = decoded;\n    }\n    if (cur.mimeType === \"text/html\" && cur.body && cur.body.data) {\n      const decoded = b64urlToUtf8(cur.body.data);\n      if (decoded && decoded.length > html.length) html = decoded;\n    }\n    if (Array.isArray(cur.parts)) {\n      for (const p of cur.parts) stack.push(p);\n    }\n  }\n  return bestText || html || \"\";\n}\n\nreturn $input.all().map(item => {\n  const data = item.json || {};\n  const payload = data.payload || {};\n\n  const headers = findHeaders(payload);\n  const subject = headers[\"subject\"] || \"\";\n  const from = headers[\"from\"] || \"\";\n\n  let body = extractBody(payload);\n  if (!body) body = data.snippet || \"\";\n\n  const crypto = require(\"crypto\");\n  let sessionId = crypto.createHash(\"md5\").update(data.From).digest(\"hex\").slice(0,10);\n  return {\n    json: {\n      sessionId: sessionId,\n      emailId: data.id || \"\",\n      subject: data.Subject,\n      from: data.From,\n      body,\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -848
+      ],
+      "id": "310a1763-c4bd-4715-8a74-64526eb49da0",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "00bc6395-54ad-4984-a1bc-3ae4a2d720a7",
+              "leftValue": "={{\n  !/(no[-_ ]?reply|do[-_ ]?not[-_ ]?reply)/i.test(($json.from || \"\")) &&\n  (\n    /(position|opportunity|opening|requirement|role|contract|full[\\s-]?time|w2|c2c|remote)/i\n      .test((($json.subject || \"\") + \" \" + ($json.body || \"\"))) ||\n    /(talend|etl|sql|snowflake|databricks|pyspark|delta\\s*lake|grc|security|compliance|data\\s*engineering)/i\n      .test((($json.subject || \"\") + \" \" + ($json.body || \"\")))\n  )\n}}\n",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "08606852-6ea3-455b-8192-63fde25525ba",
+              "leftValue": "={{ $json.passToAI }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -416,
+        -848
+      ],
+      "id": "6eabc38c-561b-4cef-a2ba-f66c1ccdf823",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node\nconst j = items[0].json || {};\nconst from = (j.from || \"\").toLowerCase();\nconst subject = (j.subject || \"\").toLowerCase();\nconst bodyRaw = (j.body || \"\").toLowerCase();\n\n// If you have HTML, strip tags quickly\nconst body = bodyRaw.replace(/<[^>]+>/g, \" \");\n\n// ---------- SIGNAL SETS ----------\nconst jobIntent = /(position|opportunity|opening|requirement|role|vacancy|headcount|hire|hiring|job\\s*(posting|alert)?)/i;\nconst outreachPhrases = /(i\\s+came\\s+across\\s+(your\\s+)?(resume|profile)|noticed\\s+your\\s+(profile|resume)|reached\\s+out|connecting\\s+regarding|based\\s+on\\s+your\\s+experience|would\\s+you\\s+be\\s+interested)/i;\nconst availability = /(are\\s+you\\s+available|availability|when\\s+can\\s+we\\s+talk|best\\s+time|schedule\\s+a\\s+call|interview|interested\\?|let\\s+me\\s+know)/i;\nconst workAuth = /(w2|c2c|1099|h-?1b|gc|green\\s*card|ead|usc|us\\s*citizen)/i;\nconst payRate = /(\\$|usd)\\s*\\d{2,3}\\s*(\\/\\s*(hr|hour))|(\\$|usd)\\s*\\d{2,3}k(\\s*\\/\\s*yr|\\/year)?/i;\nconst duration = /(contract|contract[-\\s]*to[-\\s]*hire|c2h|full[\\s-]?time|part[\\s-]?time|6[-\\s]*months|12[-\\s]*months|long[-\\s]*term)/i;\nconst location = /(remote|hybrid|onsite|on[-\\s]*site|location:|tx|ca|ny|wa|il|ga|nc|oh|fl|az|ma|nj|pa|co|va|md|mi|nc|sc|or|ut|al|mo|mn|wi|ct|nm|ok|tn|ky|la|ar|ms|id|ia|nd|sd|ne|ks|wv|vt|nh|me|ri|de|dc)/i;\nconst techStack = /(talend|etl|ss?is|sql|snowflake|databricks|pyspark|delta\\s*lake|airflow|dbt|python|salesforce|informatica|grc|governance|security|compliance|data\\s*engineering)/i;\nconst phone = /\\+?1?[-.\\s(]*\\d{3}[-.)\\s]*\\d{3}[-.\\s]*\\d{4}/;\nconst calendarLinks = /(calendly|calendar\\.google|outlook\\.office|youcanbook\\.me|savvycal|hubspot\\.meetings)/i;\n\n// Negative signals: newsletters, promos, courses, etc.\nconst marketing = /(newsletter|subscribe|unsubscribe|webinar|course|certificate|bootcamp|promo|sale|discount|marketing|sponsor|event\\s+registration|training\\s+program)/i;\n\n// Very spammy patterns\nconst tooManyLinks = ((bodyRaw.match(/https?:\\/\\/\\S+/g) || []).length > 10);\nconst noReply = /(no[-_ ]?reply|do[-_ ]?not[-_ ]?reply)/i.test(from);\n\n// ---------- SCORE ----------\nlet score = 0;\nconst add = (cond, pts) => { if (cond) score += pts; };\n\nconst text = subject + \" \" + body;\n\nadd(jobIntent.test(text), 2);\nadd(outreachPhrases.test(text), 2);\nadd(availability.test(text), 1);\nadd(workAuth.test(text), 2);\nadd(payRate.test(text), 2);\nadd(duration.test(text), 1);\nadd(location.test(text), 1);\nadd(techStack.test(text), 2);\nadd(phone.test(text), 1);\nadd(calendarLinks.test(text), 1);\n\n// negatives (subtract)\nif (marketing.test(text)) score -= 2;\nif (tooManyLinks) score -= 2;\nif (noReply) score -= 3;\n\n// Unread/recent if you have them (optional)\nconst labels = j.labelIds || [];\nconst isUnread = labels.includes(\"UNREAD\");\nconst receivedMs = Number(j.internalDate || Date.now());\nconst isRecent = (Date.now() - receivedMs) <= 14 * 24 * 3600 * 1000;\n\nj.recruiterScore = score;\nj.isUnread = isUnread;\nj.isRecent = isRecent;\n\n// Choose a threshold. 3–4 = broad, 5–6 = stricter\nconst threshold = 5;\nj.passToAI = (score >= threshold) && !noReply && !tooManyLinks && !marketing.test(text);\n\nreturn [{ json: j }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        -848
+      ],
+      "id": "7df37d26-2a29-4b5c-b371-71696109637d",
+      "name": "Code5"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.emailId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -80,
+        -864
+      ],
+      "id": "832e3b59-5443-4a4c-8a43-01b90dfb1310",
+      "name": "Get a message",
+      "webhookId": "ed45b26a-0dbd-4516-8e5e-926ab41ea3d7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------- Helpers ----------\nfunction stripHtml(input) {\n  if (!input) return \"\";\n  return String(input)\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \"\")\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \"\")\n    .replace(/<\\/?[^>]+>/g, \"\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&amp;/g, \"&\")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .trim();\n}\n\nfunction pickTextOrHtml(obj) {\n  if (obj?.text) return String(obj.text).trim();\n  if (obj?.html) return stripHtml(obj.html);\n  return \"\";\n}\n\nfunction pickSubject(msg) {\n  return (\n    msg?.subject ||\n    msg?.headers?.subject ||\n    (msg?.payload?.headers || [])\n      .find?.(h => h.name?.toLowerCase() === \"subject\")?.value ||\n    \"\"\n  );\n}\n\nfunction pickFromAddress(msg) {\n  // Mailparser-style\n  const v = msg?.from?.value;\n  if (Array.isArray(v) && v[0]?.address) return v[0].address;\n\n  const ft = msg?.from?.text;\n  if (ft) {\n    const m = ft.match(/<([^>]+)>/);\n    if (m) return m[1];\n    const m2 = ft.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n    if (m2) return m2[0];\n  }\n\n  // Gmail headers\n  const headers = (msg?.payload?.headers || []).reduce((acc, h) => {\n    acc[h.name?.toLowerCase?.()] = h.value;\n    return acc;\n  }, {});\n  if (headers.from) {\n    const m = headers.from.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n    return m ? m[0] : headers.from;\n  }\n  return \"\";\n}\n\nfunction b64urlToUtf8(b64url) {\n  if (!b64url) return \"\";\n  const b64 = b64url.replace(/-/g, \"+\").replace(/_/g, \"/\");\n  try { return Buffer.from(b64, \"base64\").toString(\"utf8\"); }\n  catch { return \"\"; }\n}\n\nfunction extractBodyFromGmailPayload(node) {\n  let bestText = \"\", html = \"\";\n  const stack = [node || {}];\n  while (stack.length) {\n    const cur = stack.pop();\n    if (!cur) continue;\n\n    if (cur.mimeType === \"text/plain\" && cur.body?.data) {\n      const decoded = b64urlToUtf8(cur.body.data);\n      if (decoded && decoded.length > bestText.length) bestText = decoded;\n    }\n    if (cur.mimeType === \"text/html\" && cur.body?.data) {\n      const decoded = stripHtml(b64urlToUtf8(cur.body.data));\n      if (decoded && decoded.length > html.length) html = decoded;\n    }\n    if (Array.isArray(cur.parts)) for (const p of cur.parts) stack.push(p);\n  }\n  return (bestText || html || \"\").trim();\n}\n\nfunction pickBody(msg) {\n  const mpBody = pickTextOrHtml(msg);\n  if (mpBody) return mpBody;\n  if (msg?.payload) return extractBodyFromGmailPayload(msg.payload);\n  return (msg?.snippet || \"\").trim();\n}\n\n// --- sendToAI heuristic ---\nconst KEYWORDS = [\n  \"interview\",\"position\",\"role\",\"recruiter\",\"hiring\",\"contract\",\n  \"full-time\",\"remote\",\"salary\",\"comp\",\"offer\",\"w2\",\"c2c\",\"visa\",\n  \"start date\",\"screen\",\"resume\",\"cv\",\"client\",\"$\"\n];\nfunction scoreRecruiterIntent(text) {\n  if (!text) return 0;\n  const t = text.toLowerCase();\n  let score = 0;\n  for (const kw of KEYWORDS) {\n    const re = kw === \"$\" ? /\\$\\s*\\d/gi : new RegExp(`\\\\b${kw}\\\\b`, \"gi\");\n    const matches = t.match(re);\n    if (matches) score += matches.length;\n  }\n  return score;\n}\nfunction shouldPassToAI(subject, from, body) {\n  const score =\n    scoreRecruiterIntent(subject) +\n    scoreRecruiterIntent(from) +\n    scoreRecruiterIntent(body);\n  const bump = /^\\s*(re|fwd?)\\s*:/i.test(subject) ? 1 : 0;\n  const recruiterScore = score + bump;\n  return { recruiterScore, passToAI: recruiterScore >= 3 };\n}\n\n// ---------- Parser for one message ----------\nfunction parseEmail(msg) {\n  const subject = pickSubject(msg);\n  const from = pickFromAddress(msg);\n  const body = stripHtml(pickBody(msg));\n\n  const { recruiterScore, passToAI } = shouldPassToAI(subject, from, body);\n\n  return {\n    emailId: msg?.id || msg?.messageId || \"\",\n    subject,\n    from,\n    body,\n    recruiterScore,\n    // include if you like:\n    // isUnread: Array.isArray(msg?.labelIds) && msg.labelIds.includes(\"UNREAD\"),\n    // isRecent: !!msg?.internalDate && (Date.now() - Number(msg.internalDate)) / 86400000 <= 14,\n    passToAI\n  };\n}\n\n// ---------- n8n return shape ----------\nconst items = $input.all();                 // get all incoming items\nconst out = items.map(it => {\n  const msg = it.json || {};\n  return { json: parseEmail(msg) };         // MUST wrap in { json: ... }\n});\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        128,
+        -864
+      ],
+      "id": "f3660829-10e1-4cfe-b8f9-fd629fa6b42b",
+      "name": "Code6"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an AI assistant that drafts professional responses to incoming emails.\nYour goal is to always return a JSON object with a ready-to-send reply.\n\nRules:\n\nGenerate the email body in HTML format.\n\nTake the incoming email’s subject, from, and body (even if they are blank).\n\nAssume the sender is legitimate and requires a professional response.\n\nDraft a polite reply that:\n\nAcknowledges the sender’s message\n\nExpresses appreciation for reaching out\n\nIf the email appears to be about a job/recruiting opportunity, show interest and highlight Joseph Bankole’s resume profile:\n\nSkills: ETL, Talend, SQL, PySpark, Azure Databricks\n\nExtras: data governance & compliance, CI/CD, team leadership\n\nCertifications: PMP, PCEP, CSM\n\nEnds with this signature:\n\nKind Regards,<br>\nJoseph Oladipo Bankole, CSM, PMP<br>\n(210) 324-3158\n\nAlways include:\n\ndraft_to: use the sender’s email, or \"unknown@example.com\" if blank.\n\ndraft_subject: prefix \"Re: \" to the original subject (or \"Re:\" if blank).\n\ndraft_body: the full reply text (HTML).\n\nOutput must be valid JSON only. If details are missing, still output defaults.\n\nSchema:\n\n{\n  \"draft_to\": \"<email of sender>\",\n  \"draft_subject\": \"Re: <original subject>\",\n  \"draft_body\": \"<html text body>\"\n}\n\nUser Message (data)\n\nIncoming email:\n\nsubject: \"{{$json.subject || ''}}\"\nfrom: \"{{$json.from || ''}}\"\nbody: \"{{($json.body || '').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').slice(0, 8000)}}\"",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        496,
+        -1200
+      ],
+      "id": "240434e8-8f09-4ad4-81cb-ec0ea49fa4fb",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxOutputTokens": 2048,
+          "temperature": 0.4,
+          "topK": 32,
+          "topP": 1,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_LOW_AND_ABOVE"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        384,
+        -976
+      ],
+      "id": "67167890-7326-43cc-b5e9-1baaf97945e6",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Google Gemini(PaLM) Api account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an AI email gatekeeper.\nYour job is to decide if an incoming email is from a legitimate professional job recruiter about a real job opportunity.\nYou must always output valid JSON in the schema below. Never return text outside the JSON.\n\nRules:\n\nIf the email looks like spam, newsletter, marketing, or not job-related → \"email_legitimacy\": false, \"is_recruiter\": false.\n\nIf it looks like a recruiter / job opportunity → \"email_legitimacy\": true, \"is_recruiter\": true.\n\nExtract: job_title, company, recruiter_name, recruiter_email, recruiter_domain.\n\nIf missing, leave empty strings.\n\nAlways include a short \"reasoning\".\n\nAlways fill every key — even if empty.\n\nSchema:\n\n{\n  \"email_legitimacy\": true|false,\n  \"is_recruiter\": true|false,\n  \"job_title\": \"<string>\",\n  \"company\": \"<string>\",\n  \"recruiter_name\": \"<string>\",\n  \"recruiter_email\": \"<string>\",\n  \"recruiter_domain\": \"<string>\",\n  \"reasoning\": \"<short one-sentence explanation>\"\n}\n\n\nConstraints:\n\nNo markdown, no commentary, no code fences.\n\nIf unknown, use empty strings.\n\nUser Message (data)\n\nIncoming email:\n\nsubject: \"{{$json.subject || ''}}\"\nfrom: \"{{$json.from || ''}}\"\nbody: \"{{($json.body || '').replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').slice(0, 8000)}}\"",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        336,
+        -624
+      ],
+      "id": "560ba898-986c-44fb-984e-694180dbd961",
+      "name": "AI Agent2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        208,
+        -416
+      ],
+      "id": "a016110d-193a-4502-ba3a-1d594a2a90e7",
+      "name": "Google Gemini Chat Model2",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Google Gemini(PaLM) Api account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse item.json.output (may be a string with ```json fences or an object)\n// and output ALL fields individually (flat) on the result.\n\nreturn items.map(item => {\n  const src = item.json?.output ?? item.json;\n  let obj = {};\n\n  if (typeof src === 'string') {\n    // Strip optional code fences like ```json ... ```\n    const text = src\n      .replace(/^\\s*```[a-z]*\\s*/i, '')\n      .replace(/\\s*```$/, '')\n      .trim();\n    try { obj = JSON.parse(text); } catch (e) { obj = {}; }\n  } else if (src && typeof src === 'object') {\n    obj = src;\n  }\n\n  // Make a flat copy so each key is an individual field.\n  const out = {};\n  for (const [k, v] of Object.entries(obj)) {\n    out[k] = v ?? null; // keep nulls explicit if a key is missing/undefined\n  }\n\n  return { json: out };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        -624
+      ],
+      "id": "81bb0c5f-4ddf-4269-b67e-c47013a94f22",
+      "name": "Code7"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Helpers ----\nfunction stripFences(s = \"\") {\n  s = String(s).trim();\n  s = s.replace(/^\\s*```(?:json)?\\s*/i, \"\").replace(/\\s*```\\s*$/i, \"\");\n  return s;\n}\n\n// ---- Get gating result from If3 ----\nconst gate = ($items(\"If3\")?.[0]?.json) || {};\nconst legit = gate.email_legitimacy ?? false;\nconst isRec = gate.is_recruiter ?? false;\n\n// If the email isn't valid recruiter mail, return no items.\nif (!(legit && isRec)) {\n  return [];\n}\n\n// ---- Get AI output and parse it ----\nconst agentOut = ($items(\"AI Agent1\")?.[0]?.json?.output) ?? \"\";\nconst text = stripFences(agentOut);\n\nlet obj = {};\ntry {\n  obj = JSON.parse(text);\n} catch (e) {\n  // Optional: crude fallback to extract fields by regex if the JSON isn't perfect\n  const pick = (key) => {\n    const m = new RegExp(`\"${key}\"\\\\s*:\\\\s*\"([\\\\s\\\\S]*?)\"`, \"i\").exec(text);\n    return m ? m[1] : undefined;\n  };\n  obj = {\n    draft_to:      pick(\"draft_to\"),\n    draft_subject: pick(\"draft_subject\"),\n    draft_body:    pick(\"draft_body\"),\n  };\n}\n\n// ---- Build output, with safe fallbacks ----\nconst subjectFallback = 'Re: ' + (($items(\"Code6\")?.[0]?.json?.subject) ?? '');\nconst out = {\n  draft_to:      obj.draft_to      ?? gate.recruiter_email ?? \"\",\n  draft_subject: obj.draft_subject ?? subjectFallback,\n  draft_body:    obj.draft_body    ?? \"\",\n};\n\n// Return exactly one item with only the draft fields\nreturn [{ json: out }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -992
+      ],
+      "id": "b021222a-5ea5-4d86-a78f-8cdc76c676f1",
+      "name": "Code8"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9443a403-95e3-4ce3-930e-e697cb786313",
+              "leftValue": "={{ $json.email_legitimacy }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ff55f0ea-b2fa-4117-9c48-5a6708ba097c",
+              "leftValue": "={{ $json.is_recruiter }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        976,
+        -624
+      ],
+      "id": "900b25ff-681c-4bf8-acbe-313e86d10524",
+      "name": "If3"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.draft_to }}",
+        "subject": "={{$json.draft_subject || 'Re: ' + $('Code6').first().json.subject}}",
+        "message": "={{$json.draft_body}}\n",
+        "options": {
+          "appendAttribution": false,
+          "ccList": "oladipo.bankole@gmail.com"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2256,
+        -960
+      ],
+      "id": "59ad2eb6-8757-4815-a89f-1482b514544b",
+      "name": "Send a message2",
+      "webhookId": "aea457f9-12e9-4176-84af-5b819c18fcd1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "advanced": true,
+        "mergeByFields": {
+          "values": [
+            {
+              "field1": "output",
+              "field2": "output"
+            }
+          ]
+        },
+        "joinMode": "keepEverything",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1152,
+        -976
+      ],
+      "id": "d005f52c-f953-4fee-bf98-e76a2df20091",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "78c45ea7-cfbf-4fe0-8ef8-5a005d904ec9",
+              "leftValue": "={{ $json.draft_body }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1648,
+        -992
+      ],
+      "id": "9d570e6c-aa8f-4ae1-927a-6380a8016d9b",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "sendTo": "oladipo.bankole@gmail.com",
+        "subject": "run_failed==>{{$json.draft_subject || 'Re: ' + $('Code6').first().json.subject}}",
+        "message": "nodata",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1856,
+        -896
+      ],
+      "id": "5ed1762a-07b1-4d21-8e2c-7d39f5b796a8",
+      "name": "Send a message",
+      "webhookId": "8c89871b-55ea-4984-afb5-76871cb608d1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "Code5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code5": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Get a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message": {
+      "main": [
+        [
+          {
+            "node": "Code6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code6": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Code7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code7": {
+      "main": [
+        [
+          {
+            "node": "If3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If3": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code8": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "7749590a-1eb0-4367-99b0-2dee7b7410fd",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a813114a12ec3fef651dd38b4b897560aab0f6cd52e4c2eb2ce662ba1e830401"
+  },
+  "id": "nP18E2K2pqdSs8Ky",
+  "tags": []
+}
